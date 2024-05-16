@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+var jwt = require('jsonwebtoken');
+require('dotenv').config()
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 5000;
@@ -39,7 +41,7 @@ async function run() {
       .db("bistroBossRestaurantDB")
       .collection("carts");
 
-    //  reviews related api
+      //  reviews related api
     app.get("/api/reviews", async (req, res) => {
       const result = await reviewCollection.find().toArray();
       res.send(result);
@@ -51,6 +53,67 @@ async function run() {
       res.send(result);
     });
 
+    //  jwt token
+    app.post("/api/jwt", async(req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+      res.send({ token });
+    });   
+
+    //  middleware
+    const verifyToken = (req, res, next) => {
+      // const token = req.headers.authorization;
+      if (!req.headers?.authorization) {
+        return res.status(401).send({message: "Unauthorized access"});
+      }
+      const token = req.headers.authorization.split(' ')[1];
+      if (token) {
+        jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+          if (err) {
+            console.log(err);
+            return res.status(401).send({message: "Unauthorized access"});
+          }
+          req.decoded = decoded;
+          next();              
+        });
+      }      
+    }
+
+    //  verify admin
+    const verifyAdmin = async(req, res, next) => {
+      const email = req.decoded.email;
+      // console.log("email 85 : ", email);
+      const query = {email: email};
+      const user = await userCollection.findOne(query);
+      // console.log("inside verify admin hook: ", user);
+      const isAdmin = user?.role == "Admin";
+      if (!isAdmin) {        
+        return res.status(403).send("Forbidden access: 90");
+      }
+      next();
+    }
+
+    //  get  users
+    app.get("/api/users", verifyToken, verifyAdmin, async(req, res) => {
+      const users = await userCollection.find().toArray();
+      res.send(users);
+    });
+
+    //  find user
+    app.get("/api/users/:email", verifyToken, async(req, res) => {
+      const email = req.params.email;
+      if(email !== req.decoded.email){
+        return res.status(403).send({message: "Forbidden access check"});
+      }
+      const query = {email: email};
+      const user = await userCollection.findOne(query);
+      let admin = false;
+      if (user) {
+        admin = user?.role == "Admin"; 
+      }
+      res.send({admin});
+    })
+
     //  user create
     app.post("/api/users", async(req, res) => {
       const user = req.body;
@@ -61,7 +124,28 @@ async function run() {
       }
       const result = await userCollection.insertOne(user);
       res.send(result);
-    })
+    });
+    //  user delete
+    app.delete("/api/users/:id", async(req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id)};
+      const result = await userCollection.deleteOne(query);
+      res.send(result);
+    });
+    //  update role
+    app.patch("/api/users/:id", async(req, res) => {
+      const id = req.params.id;
+      const userInfo = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          role: userInfo?.role,
+        }
+      } 
+      const result = await userCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
 
     //  get cart items
     app.get("/api/carts", async (req, res) => {
